@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>历史记录 · LLM Arena</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚔️</text></svg>" />
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="/"><span class="brand-logo">⚔</span> LLM Arena</a>
+      <div class="nav-links">
+        <a class="nav-link" href="/">评测</a>
+        <a class="nav-link" href="/leaderboard">排行榜</a>
+        <a class="nav-link active" href="/history">历史</a>
+      </div>
+    </div>
+  </nav>
+
+  <main class="container">
+    <div class="page-head">
+      <h1 class="page-title">历史记录</h1>
+      <p class="page-sub">所有对比评测均可回看，点击条目查看详情并打分。</p>
+    </div>
+
+    <!-- 详情视图（点击列表项后出现） -->
+    <div id="detail-view" style="display:none">
+      <button class="btn btn-ghost detail-back" id="btn-back">← 返回列表</button>
+      <div class="card detail-question">
+        <span class="tag" id="dq-cat">通用</span>
+        <span class="tag tag-muted" id="dq-time"></span>
+        <div class="dq-text" id="dq-text"></div>
+      </div>
+      <div class="answer-grid" id="detail-grid"></div>
+    </div>
+
+    <!-- 列表视图 -->
+    <div id="list-view">
+      <div class="history-list" id="history-list"></div>
+      <div class="empty-state" id="empty" style="display:none">
+        <div class="icon">🗂️</div>还没有评测记录，去 <a href="/">发起第一次对战</a>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/js/markdown.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script>
+    (function () {
+      "use strict";
+      const $ = (s) => document.querySelector(s);
+      const A = window.arena;
+
+      async function loadList() {
+        const box = $("#history-list");
+        box.innerHTML = "";
+        const data = await A.api("/api/history");
+        const items = data.items;
+        $("#empty").style.display = items.length ? "none" : "block";
+
+        items.forEach((it) => {
+          const el = document.createElement("div");
+          el.className = "card hist-item";
+          const rated = it.rated_count || 0;
+          const total = it.answer_count || 0;
+          el.innerHTML = `
+            <div class="q clamp">${A.escapeHtml(it.text)}</div>
+            <div class="hist-meta">
+              <span class="tag">${A.escapeHtml(it.category)}</span>
+              <span>🕐 ${A.fmtTime(it.created_at)}</span>
+              <span>⚙ ${total} 个模型</span>
+              <span>⭐ 已评 ${rated}/${total}</span>
+              <span style="margin-left:auto;color:var(--accent)">查看详情 →</span>
+            </div>
+          `;
+          el.addEventListener("click", () => openDetail(it.id));
+          box.appendChild(el);
+        });
+      }
+
+      async function openDetail(id) {
+        try {
+          const data = await A.api("/api/history/" + id);
+          $("#list-view").style.display = "none";
+          $("#detail-view").style.display = "block";
+
+          $("#dq-cat").textContent = data.question.category;
+          $("#dq-time").textContent = A.fmtTime(data.question.created_at);
+          $("#dq-text").textContent = data.question.text;
+
+          const grid = $("#detail-grid");
+          grid.innerHTML = "";
+          if (!data.answers.length) {
+            grid.innerHTML = '<div class="empty-state">该次评测没有回答记录</div>';
+          }
+          data.answers.forEach((a) => {
+            const el = document.createElement("div");
+            A.mountAnswerCard(el, a, false);
+            grid.appendChild(el);
+          });
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        } catch (e) {
+          A.toast("加载详情失败：" + e.message, "err");
+        }
+      }
+
+      $("#btn-back").addEventListener("click", () => {
+        $("#detail-view").style.display = "none";
+        $("#list-view").style.display = "block";
+        loadList();
+      });
+
+      loadList().catch((e) => A.toast("加载历史失败：" + e.message, "err"));
+    })();
+  </script>
+</body>
+</html>

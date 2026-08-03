@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>排行榜 · LLM Arena</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚔️</text></svg>" />
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="/"><span class="brand-logo">⚔</span> LLM Arena</a>
+      <div class="nav-links">
+        <a class="nav-link" href="/">评测</a>
+        <a class="nav-link active" href="/leaderboard">排行榜</a>
+        <a class="nav-link" href="/history">历史</a>
+      </div>
+    </div>
+  </nav>
+
+  <main class="container">
+    <div class="page-head">
+      <h1 class="page-title">排行榜</h1>
+      <p class="page-sub">按用户打分平均分排序，数据实时更新。</p>
+    </div>
+
+    <!-- 汇总卡片 -->
+    <div class="rank-cards" id="stat-cards"></div>
+
+    <!-- 分类筛选 -->
+    <div class="chips" id="filter-chips" style="margin-bottom:18px"></div>
+
+    <!-- 排行表格 -->
+    <div class="table-wrap">
+      <table class="rank">
+        <thead>
+          <tr>
+            <th>排名</th>
+            <th>模型</th>
+            <th style="width:200px">平均分</th>
+            <th>对比次数</th>
+            <th>平均耗时</th>
+            <th>平均 token</th>
+            <th>出错</th>
+          </tr>
+        </thead>
+        <tbody id="rank-body"></tbody>
+      </table>
+      <div class="empty-state" id="empty" style="display:none">
+        <div class="icon">🏜️</div>还没有评测数据，去 <a href="/">发起一次对战</a> 吧
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/js/markdown.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script>
+    (function () {
+      "use strict";
+      const $ = (s) => document.querySelector(s);
+      const A = window.arena;
+      let currentCategory = "全部";
+
+      async function load() {
+        const chipsBox = $("#filter-chips");
+        try {
+          const { categories } = await A.fetchModels();
+          const opts = ["全部", ...categories];
+          chipsBox.innerHTML = "";
+          opts.forEach((c) => {
+            const chip = document.createElement("span");
+            chip.className = "chip" + (c === currentCategory ? " active" : "");
+            chip.textContent = c;
+            chip.addEventListener("click", () => { currentCategory = c; renderChips(opts); load(); });
+            chipsBox.appendChild(chip);
+          });
+        } catch (_) { /* 分类加载失败不阻塞表格 */ }
+
+        const data = await A.api("/api/leaderboard?category=" + encodeURIComponent(currentCategory));
+        render(data);
+      }
+
+      function renderChips(opts) {
+        const chipsBox = $("#filter-chips");
+        chipsBox.querySelectorAll(".chip").forEach((el, i) => {
+          el.classList.toggle("active", opts[i] === currentCategory);
+        });
+      }
+
+      function render(data) {
+        const items = data.items;
+        const body = $("#rank-body");
+        body.innerHTML = "";
+        $("#empty").style.display = items.length ? "none" : "block";
+
+        // 汇总
+        const totalBattles = items.reduce((s, i) => s + (i.battle_count || 0), 0);
+        const maxScore = items.length ? Math.max(...items.map((i) => i.avg_score || 0)) : 0;
+        const cards = $("#stat-cards");
+        cards.innerHTML = `
+          <div class="card stat-card"><div class="k">参与模型</div><div class="v">${items.length}</div></div>
+          <div class="card stat-card"><div class="k">累计对比次数</div><div class="v">${totalBattles}</div></div>
+          <div class="card stat-card"><div class="k">最高平均分</div><div class="v">${maxScore ? maxScore.toFixed(2) : "—"}</div></div>
+          <div class="card stat-card"><div class="k">当前分类</div><div class="v" style="font-size:18px">${data.category}</div></div>
+        `;
+
+        items.forEach((it, idx) => {
+          const score = it.avg_score || 0;
+          const tr = document.createElement("tr");
+          const rankCls = idx === 0 ? "top1" : idx === 1 ? "top2" : idx === 2 ? "top3" : "";
+          const stars = `<span class="stars readonly">${[1,2,3,4,5].map(i =>
+            `<button class="star${i <= Math.round(score) ? " on" : ""}" style="cursor:default">&starf;</button>`
+          ).join("")}</span>`;
+          tr.innerHTML = `
+            <td><span class="rank-no ${rankCls}">${idx + 1}</span></td>
+            <td>
+              <span style="display:inline-flex;align-items:center;gap:8px">
+                <span class="mdot" style="width:18px;height:18px;border-radius:6px;display:inline-grid;place-items:center;font-size:10px;font-weight:800;color:#fff;background:${A.modelColor(it.model)}">${A.modelName(it.model).split(/\s+/)[0].slice(0,2).toUpperCase()}</span>
+                <b>${A.modelName(it.model)}</b>
+              </span>
+            </td>
+            <td>
+              <div class="score-cell">
+                <div class="score-bar"><i style="width:${score ? Math.min(100, score / 5 * 100) : 0}%"></i></div>
+                <b style="min-width:34px">${score ? score.toFixed(2) : "—"}</b>
+                <span style="font-size:11px">${stars}</span>
+              </div>
+            </td>
+            <td>${it.battle_count}</td>
+            <td>${A.fmtMs(it.avg_latency_ms)}</td>
+            <td>${A.fmtTokens(it.avg_tokens)}</td>
+            <td style="color:${it.error_count ? "var(--red)" : "var(--text-faint)"}">${it.error_count || 0}</td>
+          `;
+          body.appendChild(tr);
+        });
+      }
+
+      load().catch((e) => A.toast("加载排行榜失败：" + e.message, "err"));
+    })();
+  </script>
+</body>
+</html>

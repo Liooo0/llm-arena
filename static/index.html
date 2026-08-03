@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM Arena · 模型竞技场</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚔️</text></svg>" />
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="/"><span class="brand-logo">⚔</span> LLM Arena</a>
+      <div class="nav-links">
+        <a class="nav-link active" href="/">评测</a>
+        <a class="nav-link" href="/leaderboard">排行榜</a>
+        <a class="nav-link" href="/history">历史</a>
+      </div>
+      <div class="nav-right">
+        <span class="nav-status"><span class="dot wait" id="nav-dot"></span><span id="nav-health">检查模型状态…</span></span>
+      </div>
+    </div>
+  </nav>
+
+  <main class="container">
+    <div class="page-head">
+      <h1 class="page-title">模型竞技场</h1>
+      <p class="page-sub">同一个问题，同时发给多个大模型并排对比，然后给它们打分。</p>
+    </div>
+
+    <!-- 评测表单 -->
+    <section class="card battle-card">
+      <label class="field-label" for="question">问题 <span class="char-count"><span id="char-num">0</span> / 2000</span></label>
+      <textarea id="question" class="question-input" maxlength="2000"
+        placeholder="输入你想对比的问题，例如：用 Python 写一个快速排序，并解释时间复杂度。"></textarea>
+
+      <div class="form-grid">
+        <div>
+          <div class="field-label">分类</div>
+          <div class="chips" id="category-chips"></div>
+        </div>
+        <div>
+          <div class="field-label">参与模型</div>
+          <div class="model-select" id="model-chips"></div>
+        </div>
+      </div>
+
+      <div class="submit-row">
+        <button class="btn btn-primary" id="btn-battle">
+          <span id="btn-text">⚔ 发起对战</span>
+          <span class="spinner" id="btn-spinner" style="display:none"></span>
+        </button>
+        <span class="rate-hint" id="battle-hint"></span>
+      </div>
+
+      <!-- 健康状态 -->
+      <div class="health-row" id="health-row"></div>
+    </section>
+
+    <!-- 结果 -->
+    <div id="results" style="display:none">
+      <div class="results-head">
+        <h2 id="results-title">对战结果</h2>
+        <span class="hint" id="results-hint"></span>
+      </div>
+      <div class="answer-grid" id="results-grid"></div>
+    </div>
+  </main>
+
+  <script src="/static/js/markdown.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script>
+    (function () {
+      "use strict";
+      const $ = (s) => document.querySelector(s);
+      const A = window.arena;
+
+      let categories = [];
+      let allModels = [];
+      let selectedModels = new Set();
+      let selectedCategory = "通用";
+
+      /* ---------- 初始化模型 & 分类 ---------- */
+      async function init() {
+        try {
+          const data = await A.fetchModels();
+          categories = data.categories;
+          allModels = data.models;
+          allModels.forEach((m) => selectedModels.add(m.id));
+
+          renderCategoryChips();
+          renderModelChips();
+          checkHealth();
+        } catch (e) {
+          A.toast("加载失败：" + e.message, "err");
+        }
+      }
+
+      function renderCategoryChips() {
+        const box = $("#category-chips");
+        box.innerHTML = "";
+        categories.forEach((c) => {
+          const chip = document.createElement("span");
+          chip.className = "chip" + (c === selectedCategory ? " active" : "");
+          chip.textContent = c;
+          chip.addEventListener("click", () => {
+            selectedCategory = c;
+            renderCategoryChips();
+          });
+          box.appendChild(chip);
+        });
+      }
+
+      function renderModelChips() {
+        const box = $("#model-chips");
+        box.innerHTML = "";
+        allModels.forEach((m) => {
+          const chip = document.createElement("span");
+          const on = selectedModels.has(m.id);
+          chip.className = "model-chip" + (on ? " active" : " off");
+          chip.style.setProperty("--mc", A.modelColor(m.id));
+          chip.innerHTML = `<span class="mdot"></span>${A.modelName(m.id)}`;
+          chip.title = m.desc || "";
+          chip.addEventListener("click", () => {
+            if (selectedModels.has(m.id)) selectedModels.delete(m.id);
+            else selectedModels.add(m.id);
+            renderModelChips();
+          });
+          box.appendChild(chip);
+        });
+      }
+
+      /* ---------- 健康检查 ---------- */
+      async function checkHealth() {
+        const row = $("#health-row");
+        const dot = $("#nav-dot");
+        const label = $("#nav-health");
+        dot.className = "dot wait";
+        label.textContent = "检查模型状态…";
+        row.innerHTML = "";
+        allModels.forEach((m) => {
+          const pill = document.createElement("span");
+          pill.className = "health-pill";
+          pill.innerHTML = `<span class="sdot na"></span>${A.modelName(m.id)} <span class="h-ms"></span>`;
+          pill.id = "hp-" + m.id;
+          row.appendChild(pill);
+        });
+
+        try {
+          const res = await A.api("/api/health");
+          res.items.forEach((it) => {
+            // 模型 id 可能含小数点（如 glm-5.2），querySelector("#hp-"+id) 会把 . 当类选择器，
+            // 必须用 getElementById 做字面量匹配。
+            const pill = document.getElementById("hp-" + it.model);
+            if (!pill) return;
+            const sd = pill.querySelector(".sdot");
+            sd.className = "sdot " + (it.ok ? "ok" : "bad");
+            pill.querySelector(".h-ms").textContent = it.ok ? "· " + A.fmtMs(it.latency_ms) : "· 不可用";
+          });
+          const okCount = res.items.filter((i) => i.ok).length;
+          dot.className = "dot " + (okCount > 0 ? "" : "off");
+          label.textContent = okCount + "/" + res.items.length + " 个模型可用";
+        } catch (e) {
+          dot.className = "dot off";
+          label.textContent = "健康检查失败";
+        }
+      }
+
+      /* ---------- 提交对战 ---------- */
+      async function runBattle() {
+        const q = $("#question").value.trim();
+        if (!q) { A.toast("请先输入问题", "err"); $("#question").focus(); return; }
+        if (selectedModels.size === 0) { A.toast("请至少选择一个模型", "err"); return; }
+
+        const btn = $("#btn-battle");
+        btn.disabled = true;
+        $("#btn-text").textContent = "对战中…";
+        $("#btn-spinner").style.display = "inline-block";
+        $("#battle-hint").textContent = "并发请求中，最多约 60 秒，请稍候…";
+
+        const grid = $("#results-grid");
+        const results = $("#results");
+        results.style.display = "block";
+        $("#results-title").textContent = "对战进行中";
+        $("#results-hint").textContent = "正在等待各模型回复";
+        // 骨架屏
+        grid.innerHTML = "";
+        for (let i = 0; i < selectedModels.size; i++) {
+          const sk = document.createElement("div");
+          sk.className = "skeleton";
+          grid.appendChild(sk);
+        }
+
+        try {
+          const data = await A.api("/api/battle", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              question: q,
+              category: selectedCategory,
+              models: [...selectedModels],
+            }),
+          });
+
+          $("#results-title").textContent = "对战结果";
+          const okCount = data.answers.filter((a) => !a.error).length;
+          $("#results-hint").textContent = `${okCount}/${data.answers.length} 个模型回复成功`;
+
+          grid.innerHTML = "";
+          data.answers.forEach((a) => {
+            const el = document.createElement("div");
+            A.mountAnswerCard(el, a, false);
+            grid.appendChild(el);
+          });
+        } catch (e) {
+          $("#results-title").textContent = "对战失败";
+          grid.innerHTML = "";
+          const empty = document.createElement("div");
+          empty.className = "empty-state";
+          empty.innerHTML = `<div class="icon">⚠️</div>${A.escapeHtml(e.message)}`;
+          grid.appendChild(empty);
+        } finally {
+          btn.disabled = false;
+          $("#btn-text").textContent = "⚔ 发起对战";
+          $("#btn-spinner").style.display = "none";
+          $("#battle-hint").textContent = "";
+        }
+      }
+
+      /* ---------- 事件 ---------- */
+      $("#question").addEventListener("input", () => {
+        $("#char-num").textContent = $("#question").value.length;
+      });
+      $("#btn-battle").addEventListener("click", runBattle);
+      $("#question").addEventListener("keydown", (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runBattle();
+      });
+      $("#health-row").addEventListener("click", () => checkHealth());
+
+      init();
+    })();
+  </script>
+</body>
+</html>
