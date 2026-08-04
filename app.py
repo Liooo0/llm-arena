@@ -12,11 +12,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -27,6 +28,21 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="LLM Arena 模型竞技场")
 database.init_db()
+
+# ---------------------------------------------------------------------------
+# 可选管理鉴权：设置 LLM_ARENA_ADMIN_TOKEN 后，所有 /api/* 需带 X-Admin-Token
+# 不设置则维持本地免鉴权（默认仅绑定 127.0.0.1）
+# ---------------------------------------------------------------------------
+
+ADMIN_TOKEN = os.environ.get("LLM_ARENA_ADMIN_TOKEN", "")
+
+
+@app.middleware("http")
+async def admin_auth(request: Request, call_next):
+    if ADMIN_TOKEN and request.url.path.startswith("/api/"):
+        if request.headers.get("x-admin-token", "") != ADMIN_TOKEN:
+            return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------

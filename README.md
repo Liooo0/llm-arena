@@ -165,6 +165,7 @@ bash scripts/acceptance_test.sh   # 需先完成步骤 2、3
 **安全怎么考虑？**
 - API Key 只从环境变量读，`.gitignore` 排除 `.env`、`venv/`、`*.db`，commit 历史里不落 key。
 - 前端渲染先 HTML 转义再套 Markdown，避免模型输出注入脚本（XSS）。
+- **可选管理鉴权**：设置环境变量 `LLM_ARENA_ADMIN_TOKEN` 后，所有 `/api/*` 需携带 `X-Admin-Token` 请求头，否则返回 403。默认不设置（本地免鉴权），**仅在把服务暴露到局域网/公网时启用**。
 
 ## 已知限制 / 后续方向
 
