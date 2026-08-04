@@ -4,3 +4,6 @@ __pycache__/
 *.db
 .DS_Store
 *.pyc
+BRIEF_*.md
+reports/
+scripts/night_*.py

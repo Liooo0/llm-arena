@@ -142,14 +142,11 @@ bash scripts/acceptance_test.sh   # 需先完成步骤 2、3
 
 ## 界面截图
 
-<!--
-  功能截图占位：替换为实际截图即可。
-  建议放三张：评测页 / 排行榜 / 历史记录。
-  ![评测页](docs/screenshots/index.png)
-  ![排行榜](docs/screenshots/leaderboard.png)
-  ![历史记录](docs/screenshots/history.png)
--->
-_（截图占位：评测页 · 排行榜 · 历史记录，运行后自行补充）_
+![评测页](docs/screenshots/index.png)
+
+![排行榜](docs/screenshots/leaderboard.png)
+
+![历史记录](docs/screenshots/history.png)
 
 ## 面试要点
 
