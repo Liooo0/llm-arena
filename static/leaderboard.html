@@ -36,9 +36,10 @@
       <table class="rank">
         <thead>
           <tr>
-            <th>排名</th>
+<th>排名</th>
             <th>模型</th>
-            <th style="width:200px">平均分</th>
+            <th>Elo</th>
+            <th>平均分</th>
             <th>对比次数</th>
             <th>平均耗时</th>
             <th>平均 token</th>
@@ -97,6 +98,7 @@
         // 汇总
         const totalBattles = items.reduce((s, i) => s + (i.battle_count || 0), 0);
         const maxScore = items.length ? Math.max(...items.map((i) => i.avg_score || 0)) : 0;
+        const hasDuel = items.some((i) => (i.duel_count || 0) > 0);
         const cards = $("#stat-cards");
         cards.innerHTML = `
           <div class="card stat-card"><div class="k">参与模型</div><div class="v">${items.length}</div></div>
@@ -112,6 +114,9 @@
           const stars = `<span class="stars readonly">${[1,2,3,4,5].map(i =>
             `<button class="star${i <= Math.round(score) ? " on" : ""}" style="cursor:default">&starf;</button>`
           ).join("")}</span>`;
+          const eloCell = hasDuel
+            ? `<td><b>${it.elo ? it.elo.toFixed(0) : "—"}</b><span style="font-size:11px;color:var(--text-faint)"> ${it.duel_count || 0}场</span></td>`
+            : `<td style="color:var(--text-faint)">未开启</td>`;
           tr.innerHTML = `
             <td><span class="rank-no ${rankCls}">${idx + 1}</span></td>
             <td>
@@ -120,6 +125,7 @@
                 <b>${A.modelName(it.model)}</b>
               </span>
             </td>
+            ${eloCell}
             <td>
               <div class="score-cell">
                 <div class="score-bar"><i style="width:${score ? Math.min(100, score / 5 * 100) : 0}%"></i></div>

@@ -1,9 +1,10 @@
 """SQLite 数据库层：建表 + 读写操作。
 
-三张表：
+四张表：
 - questions: 一次评测的问题
 - answers:   每个模型对该问题的回答（含耗时/token/错误）
 - ratings:   用户对单个回答的打分（answer_id 唯一，可覆盖更新）
+- duels:     pairwise 对决记录（用户判断两个回答谁更好）→ 驱动 Elo 排名
 
 约定：每个函数用独立的短连接（with 块自动 close），避免跨线程共享连接问题。
 """
@@ -14,6 +15,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+import elo as elo_engine
 
 DB_PATH = Path(__file__).parent / "llm_arena.db"
 
@@ -61,8 +64,25 @@ def init_db() -> None:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS duels (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                question_id   INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+                winner_model  TEXT NOT NULL,
+                loser_model   TEXT NOT NULL,
+                outcome       REAL NOT NULL CHECK(outcome IN (1.0, 0.0, 0.5)),
+                created_at    TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS elo_ratings (
+                model    TEXT PRIMARY KEY,
+                rating   REAL NOT NULL,
+                games    INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_answers_question ON answers(question_id);
             CREATE INDEX IF NOT EXISTS idx_answers_model ON answers(model);
+            CREATE INDEX IF NOT EXISTS idx_duels_question ON duels(question_id);
             """
         )
 
@@ -127,6 +147,24 @@ def answer_exists(answer_id: int) -> bool:
         return row is not None
 
 
+def answer_model(answer_id: int) -> Optional[str]:
+    """返回某回答的模型 id。"""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT model FROM answers WHERE id = ?", (answer_id,)
+        ).fetchone()
+        return str(row["model"]) if row else None
+
+
+def answer_question(answer_id: int) -> Optional[int]:
+    """返回某回答所属 question id。"""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT question_id FROM answers WHERE id = ?", (answer_id,)
+        ).fetchone()
+        return int(row["question_id"]) if row else None
+
+
 def get_rating(answer_id: int) -> Optional[int]:
     """返回某回答的当前评分（无则 None）。"""
     with _conn() as conn:
@@ -134,32 +172,6 @@ def get_rating(answer_id: int) -> Optional[int]:
             "SELECT score FROM ratings WHERE answer_id = ?", (answer_id,)
         ).fetchone()
         return int(row["score"]) if row else None
-
-
-def get_leaderboard(category: Optional[str] = None) -> list[dict[str, Any]]:
-    """按模型聚合：对比次数、平均分、平均耗时、平均 token。可按分类过滤。"""
-    where, params = "", []
-    if category:
-        where = "WHERE q.category = ?"
-        params = [category]
-
-    sql = f"""
-        SELECT a.model,
-               COUNT(DISTINCT a.question_id)                 AS battle_count,
-               ROUND(AVG(r.score), 2)                        AS avg_score,
-               ROUND(AVG(a.latency_ms), 0)                   AS avg_latency_ms,
-               ROUND(AVG(a.tokens), 0)                       AS avg_tokens,
-               SUM(CASE WHEN a.error IS NOT NULL THEN 1 ELSE 0 END) AS error_count
-        FROM answers a
-        JOIN questions q ON q.id = a.question_id
-        LEFT JOIN ratings r ON r.answer_id = a.id
-        {where}
-        GROUP BY a.model
-        ORDER BY avg_score DESC NULLS LAST, battle_count DESC
-    """
-    with _conn() as conn:
-        rows = conn.execute(sql, params).fetchall()
-    return [dict(r) for r in rows]
 
 
 def list_history(limit: int = 50) -> list[dict[str, Any]]:
@@ -178,6 +190,98 @@ def list_history(limit: int = 50) -> list[dict[str, Any]]:
     with _conn() as conn:
         rows = conn.execute(sql, (limit,)).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Elo / 对决
+# ---------------------------------------------------------------------------
+
+def get_elo(model: str) -> tuple[float, int]:
+    """返回某模型的 (elo, 对局数)，无记录时返回起始值。"""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT rating, games FROM elo_ratings WHERE model = ?", (model,)
+        ).fetchone()
+    if not row:
+        return elo_engine.START_ELO, 0
+    return float(row["rating"]), int(row["games"])
+
+
+def _set_elo(model: str, rating: float, games: int) -> None:
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO elo_ratings(model, rating, games, updated_at) VALUES (?, ?, ?, ?)
+               ON CONFLICT(model)
+               DO UPDATE SET rating = excluded.rating, games = excluded.games,
+                             updated_at = excluded.updated_at""",
+            (model, rating, games, _now()),
+        )
+
+
+def record_duel(question_id: int, winner_model: str, loser_model: str,
+                outcome: float = 1.0) -> dict[str, Any]:
+    """记录一场对决并更新双方 Elo。
+
+    outcome: 1.0 = winner_model 胜, 0.5 = 平局(此时两个参数语义变为 a/b), 0.0 = winner_model 负
+    返回 {winner, loser, new_winner_elo, new_loser_elo, outcome}。
+    """
+    outcome = float(outcome)
+    if outcome not in (1.0, 0.0, 0.5):
+        raise ValueError("outcome 必须是 1.0 / 0.0 / 0.5")
+    # 平局时按传入顺序当 a/b 更新
+    ra, ga = get_elo(winner_model)
+    rb, gb = get_elo(loser_model)
+    new_a, new_b = elo_engine.update_elo(ra, rb, outcome)
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO duels(question_id, winner_model, loser_model, outcome, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (question_id, winner_model, loser_model, outcome, _now()),
+        )
+    _set_elo(winner_model, new_a, ga + 1)
+    _set_elo(loser_model, new_b, gb + 1)
+    return {
+        "winner": winner_model, "loser": loser_model, "outcome": outcome,
+        "new_winner_elo": new_a, "new_loser_elo": new_b,
+    }
+
+
+def get_elo_leaderboard(category: Optional[str] = None) -> list[dict[str, Any]]:
+    """按 Elo 排序的模型排名（含对局数与评分统计，可按分类过滤）。"""
+    where, params = "", []
+    if category:
+        where = "WHERE q.category = ?"
+        params = [category]
+    sql = f"""
+        SELECT a.model,
+               COUNT(DISTINCT a.question_id)                 AS battle_count,
+               ROUND(AVG(r.score), 2)                        AS avg_score,
+               ROUND(AVG(a.latency_ms), 0)                   AS avg_latency_ms,
+               ROUND(AVG(a.tokens), 0)                       AS avg_tokens,
+               SUM(CASE WHEN a.error IS NOT NULL THEN 1 ELSE 0 END) AS error_count
+        FROM answers a
+        JOIN questions q ON q.id = a.question_id
+        LEFT JOIN ratings r ON r.answer_id = a.id
+        {where}
+        GROUP BY a.model
+    """
+    with _conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    elo_map = {m: get_elo(m) for m in {r["model"] for r in rows}}
+    out = []
+    for r in rows:
+        d = dict(r)
+        rating, games = elo_map.get(d["model"], (elo_engine.START_ELO, 0))
+        d["elo"] = rating
+        d["duel_count"] = games
+        out.append(d)
+    # 有对决记录的按 Elo 排,没对决过的按平均分排
+    out.sort(key=lambda x: (
+        0 if x["duel_count"] > 0 else 1,
+        -x["elo"],
+        -(x["avg_score"] if x["avg_score"] is not None else -1),
+    ))
+    return out
 
 
 def get_history_detail(question_id: int) -> Optional[dict[str, Any]]:

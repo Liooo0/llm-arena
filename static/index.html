@@ -166,7 +166,7 @@
         }
       }
 
-      /* ---------- 提交对战 ---------- */
+      /* ---------- 提交对战(双盲:默认匿名) ---------- */
       async function runBattle() {
         const q = $("#question").value.trim();
         if (!q) { A.toast("请先输入问题", "err"); $("#question").focus(); return; }
@@ -204,14 +204,87 @@
 
           $("#results-title").textContent = "对战结果";
           const okCount = data.answers.filter((a) => !a.error).length;
-          $("#results-hint").textContent = `${okCount}/${data.answers.length} 个模型回复成功`;
+          $("#results-hint").textContent =
+            `${okCount}/${data.answers.length} 个模型回复成功 · ` +
+            `<button class="link-btn" id="reveal-all">揭晓全部</button>`;
+
+          // 双盲:打乱卡片顺序,匿名展示(只显示"模型 A/B/C")
+          const okAnswers = data.answers.filter((a) => !a.error);
+          const failAnswers = data.answers.filter((a) => a.error);
+          const letters = "ABCDEFGHIJ".split("");
+          okAnswers.forEach((a, i) => {
+            a.blind = true;
+            a.blindLabel = letters[i] || "?";
+          });
+          const shuffled = [...okAnswers].sort(() => Math.random() - 0.5);
+          const finalList = shuffled.concat(failAnswers);
 
           grid.innerHTML = "";
-          data.answers.forEach((a) => {
+          finalList.forEach((a) => {
             const el = document.createElement("div");
             A.mountAnswerCard(el, a, false);
             grid.appendChild(el);
           });
+
+          // 双盲结束:选两张卡片 → 揭晓 → 记录对决
+          const cards = grid.querySelectorAll(".answer-card");
+          const duelBar = document.createElement("div");
+          duelBar.className = "duel-bar";
+          duelBar.innerHTML =
+            `<span class="hint">对决(双盲):点击两张卡片选定,再判定胜负</span>` +
+            `<button class="btn btn-small" id="duel-submit" disabled>判定胜负</button>`;
+          grid.parentElement.insertBefore(duelBar, grid.nextSibling);
+
+          const selectedIdx = new Set();
+          cards.forEach((card, idx) => {
+            card.addEventListener("click", () => {
+              if (finalList[idx].error) return;
+              if (selectedIdx.has(idx)) {
+                selectedIdx.delete(idx);
+                card.classList.remove("picked");
+              } else if (selectedIdx.size < 2) {
+                selectedIdx.add(idx);
+                card.classList.add("picked");
+              }
+              $("#duel-submit").disabled = selectedIdx.size !== 2;
+            });
+          });
+
+          $("#duel-submit").addEventListener("click", async () => {
+            const [i, j] = [...selectedIdx];
+            const first = finalList[i];
+            const second = finalList[j];
+            // 揭晓两个模型名
+            cards[i].querySelector(".reveal-btn").click();
+            cards[j].querySelector(".reveal-btn").click();
+            try {
+              await A.api("/api/duel", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  winner_answer_id: first.answer_id,
+                  loser_answer_id: second.answer_id,
+                  outcome: "win",
+                }),
+              });
+              A.toast("对决已记录,Elo 已更新", "ok");
+            } catch (e) {
+              A.toast("对决失败:" + e.message, "err");
+            }
+            selectedIdx.clear();
+            cards.forEach((c) => c.classList.remove("picked"));
+            $("#duel-submit").disabled = true;
+          });
+
+          const ra = $("#reveal-all");
+          if (ra) {
+            ra.addEventListener("click", () => {
+              grid.querySelectorAll(".answer-card").forEach((c) => {
+                const r = c.querySelector(".reveal-btn");
+                if (r) r.click();
+              });
+            });
+          }
         } catch (e) {
           $("#results-title").textContent = "对战失败";
           grid.innerHTML = "";

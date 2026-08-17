@@ -126,10 +126,15 @@
     });
   }
 
-  /* ---------- 回答卡片 ---------- */
+  /* ---------- 回答卡片(支持双盲:默认匿名,可揭晓) ---------- */
 
   function answerCardHTML(a) {
-    const color = modelColor(a.model);
+    const color = a.blind ? "#6d8cff" : modelColor(a.model);
+    const label = a.blind ? "模型 " + (a.blindLabel || "?") : modelName(a.model);
+    const initial = a.blind ? (a.blindLabel || "?") : modelInitial(a.model);
+    const revealBtn = a.blind
+      ? `<button class="reveal-btn" data-blind="1">揭晓模型</button>`
+      : "";
     const hasContent = a.content && a.content.trim().length > 0;
     const body = hasContent
       ? `<div class="answer-body markdown">${renderMarkdown(a.content)}</div>`
@@ -140,8 +145,9 @@
     return `
       <div class="answer-card" style="--mc:${color}">
         <div class="answer-head">
-          <span class="mdot">${modelInitial(a.model)}</span>
-          <span class="mname">${modelName(a.model)}</span>
+          <span class="mdot">${initial}</span>
+          <span class="mname">${label}</span>
+          ${revealBtn}
           <span class="answer-meta">耗时 ${fmtMs(a.latency_ms)}<br>token ${fmtTokens(a.tokens)}</span>
         </div>
         ${body}
@@ -157,7 +163,70 @@
     el.innerHTML = answerCardHTML(a);
     const host = el.querySelector(".stars-host");
     attachStars(host, a.answer_id, a.rating || 0, readonly || !!a.error);
+    const reveal = el.querySelector(".reveal-btn");
+    if (reveal) {
+      reveal.addEventListener("click", () => {
+        reveal.remove();
+        const mdot = el.querySelector(".mdot");
+        const mname = el.querySelector(".mname");
+        mdot.textContent = modelInitial(a.model);
+        mdot.style.background = modelColor(a.model);
+        mname.textContent = modelName(a.model);
+        el.style.setProperty("--mc", modelColor(a.model));
+        toast("已揭晓:" + modelName(a.model), "ok");
+      });
+    }
     return el;
+  }
+
+  function mountDuelControls(container, answers) {
+    /* 两两对决按钮:选中两个有效回答后提交 /api/duel */
+    let sel = new Set();
+    container.innerHTML = '<div class="duel-bar">对决:点击两张回答卡片挑选,再点「判定胜负」</div>';
+    const bar = container.querySelector(".duel-bar");
+    const btn = document.createElement("button");
+    btn.textContent = "判定胜负(选中两个)";
+    btn.className = "duel-submit";
+    btn.disabled = true;
+    bar.appendChild(btn);
+
+    container.querySelectorAll(".answer-card").forEach((card, i) => {
+      card.classList.add("duelable");
+      card.addEventListener("click", () => {
+        if (answers[i].error) return;
+        if (sel.has(i)) {
+          sel.delete(i);
+          card.classList.remove("selected");
+        } else if (sel.size < 2) {
+          sel.add(i);
+          card.classList.add("selected");
+        }
+        btn.disabled = sel.size !== 2;
+      });
+    });
+
+    btn.addEventListener("click", async () => {
+      const [x, y] = [...sel];
+      const winner = x;
+      const loser = y;
+      try {
+        await api("/api/duel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            winner_answer_id: answers[winner].answer_id,
+            loser_answer_id: answers[loser].answer_id,
+            outcome: "win",
+          }),
+        });
+        toast("对决已记录,Elo 已更新", "ok");
+        container.querySelectorAll(".answer-card").forEach((c) => c.classList.remove("selected", "duelable"));
+        btn.disabled = true;
+        sel.clear();
+      } catch (e) {
+        toast("对决失败:" + e.message, "err");
+      }
+    });
   }
 
   /* ---------- Toast ---------- */
@@ -195,6 +264,7 @@
     renderStars,
     answerCardHTML,
     mountAnswerCard,
+    mountDuelControls,
     toast,
   };
 })();

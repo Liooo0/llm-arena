@@ -1,0 +1,14 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "SIM", "B", "S"]
+# UP045: 项目统一用 Optional[X] 风格,不做 X|None 迁移(避免大范围存量改动)
+# RUF059: 测试中解包未用变量属正常写法
+# SIM102: 嵌套 if 在测试断言中可读性更好
+# S101: 测试中的 assert 属正常用法
+# EXE001: 跨平台仓库不强制保留执行位
+# S608: SQL 列名来自代码常量,非用户输入
+# E501: 存量长行(模型描述/中文文案),渐进治理
+ignore = ["UP045", "RUF059", "SIM102", "S101", "EXE001", "S608", "E501"]

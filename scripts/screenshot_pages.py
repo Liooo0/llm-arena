@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """截图 llm-arena 三页面 → docs/screenshots/"""
-import asyncio, os, sys
+import asyncio
+import os
+
 from playwright.async_api import async_playwright
 
 BASE = "http://127.0.0.1:8000"

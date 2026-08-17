@@ -60,6 +60,16 @@ class RateRequest(BaseModel):
     score: int = Field(..., ge=1, le=5)
 
 
+class DuelRequest(BaseModel):
+    """记录一场 pairwise 对决: winner_answer_id 胜过 loser_answer_id。
+
+    outcome: "win" / "tie"(两模型相当,此时两个 id 顺序无意义)。
+    """
+    winner_answer_id: int
+    loser_answer_id: int
+    outcome: str = "win"
+
+
 # ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------
@@ -111,12 +121,38 @@ async def api_rate(body: RateRequest) -> dict:
     return {"rating_id": rating_id, "answer_id": body.answer_id, "score": body.score}
 
 
+@app.post("/api/duel")
+async def api_duel(body: DuelRequest) -> dict:
+    """记录一场对决(用户判断哪个回答更好)并更新双方 Elo。"""
+    from database import answer_model
+
+    wa = answer_model(body.winner_answer_id)
+    la = answer_model(body.loser_answer_id)
+    if wa is None or la is None:
+        raise HTTPException(status_code=404, detail="回答不存在")
+    if wa == la:
+        raise HTTPException(status_code=400, detail="不能同模型对决")
+    outcome = {"win": 1.0, "tie": 0.5}.get(body.outcome, 1.0)
+    detail = database.record_duel(
+        question_id=_question_of(body.winner_answer_id),
+        winner_model=wa, loser_model=la, outcome=outcome,
+    )
+    return {"ok": True, **detail}
+
+
+def _question_of(answer_id: int) -> int:
+    qid = database.answer_question(answer_id)
+    if qid is None:
+        raise HTTPException(status_code=404, detail="回答不存在")
+    return qid
+
+
 @app.get("/api/leaderboard")
 async def api_leaderboard(category: Optional[str] = None) -> dict:
-    """返回排行榜数据（可按分类过滤）。"""
+    """返回排行榜数据(按 Elo 排序,含评分统计,可按分类过滤)。"""
     if category == "全部" or not category:
         category = None
-    rows = database.get_leaderboard(category)
+    rows = database.get_elo_leaderboard(category)
     return {"category": category or "全部", "items": rows}
 
 
