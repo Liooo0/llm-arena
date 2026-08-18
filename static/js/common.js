@@ -72,6 +72,17 @@
     return String(n);
   }
 
+  function fmtTps(a) {
+    if (a.ttft_ms == null || a.latency_ms == null || !a.output_tokens) return "—";
+    const genS = (a.latency_ms - a.ttft_ms) / 1000;
+    return genS > 0 ? (a.output_tokens / genS).toFixed(1) + "/s" : "—";
+  }
+
+  function fmtCost(usd) {
+    if (usd == null) return "—";
+    return "$" + (usd < 0.01 ? usd.toFixed(4) : usd.toFixed(3));
+  }
+
   function fmtTime(iso) {
     if (!iso) return "";
     const d = new Date(iso);
@@ -142,14 +153,18 @@
     const err = a.error
       ? `<div class="answer-error">${escapeHtml(a.error)}</div>`
       : "";
+    const judge = !a.error && a.judge_score
+      ? `<div class="judge-badge" title="LLM Judge：${escapeHtml(a.judge_reason || "无理由")}">🤖 Judge ${a.judge_score}/5</div>`
+      : "";
     return `
       <div class="answer-card" style="--mc:${color}">
         <div class="answer-head">
           <span class="mdot">${initial}</span>
           <span class="mname">${label}</span>
           ${revealBtn}
-          <span class="answer-meta">耗时 ${fmtMs(a.latency_ms)}<br>token ${fmtTokens(a.tokens)}</span>
+          <span class="answer-meta">耗时 ${fmtMs(a.latency_ms)} · 首字 ${fmtMs(a.ttft_ms)}<br>${fmtTokens(a.output_tokens)} out · ${fmtTps(a)} · ${fmtCost(a.cost_usd)}</span>
         </div>
+        ${judge}
         ${body}
         ${err}
         <div class="answer-foot">
@@ -259,6 +274,8 @@
     escapeHtml,
     fmtMs,
     fmtTokens,
+    fmtTps,
+    fmtCost,
     fmtTime,
     attachStars,
     renderStars,

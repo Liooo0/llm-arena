@@ -22,7 +22,7 @@
   <main class="container">
     <div class="page-head">
       <h1 class="page-title">排行榜</h1>
-      <p class="page-sub">按用户打分平均分排序，数据实时更新。</p>
+      <p class="page-sub">按 Elo / 平均分排序。Judge 分 = LLM 自动审判;成本按占位单价估算,仅供相对比较。</p>
     </div>
 
     <!-- 汇总卡片 -->
@@ -40,9 +40,12 @@
             <th>模型</th>
             <th>Elo</th>
             <th>平均分</th>
+            <th>Judge分</th>
             <th>对比次数</th>
             <th>平均耗时</th>
-            <th>平均 token</th>
+            <th>首字延迟</th>
+            <th>生成速度</th>
+            <th>成本合计</th>
             <th>出错</th>
           </tr>
         </thead>
@@ -97,13 +100,16 @@
 
         // 汇总
         const totalBattles = items.reduce((s, i) => s + (i.battle_count || 0), 0);
+        const totalCost = items.reduce((s, i) => s + (i.total_cost_usd || 0), 0);
         const maxScore = items.length ? Math.max(...items.map((i) => i.avg_score || 0)) : 0;
         const hasDuel = items.some((i) => (i.duel_count || 0) > 0);
+        const judged = items.filter((i) => i.avg_judge != null).length;
         const cards = $("#stat-cards");
         cards.innerHTML = `
           <div class="card stat-card"><div class="k">参与模型</div><div class="v">${items.length}</div></div>
           <div class="card stat-card"><div class="k">累计对比次数</div><div class="v">${totalBattles}</div></div>
-          <div class="card stat-card"><div class="k">最高平均分</div><div class="v">${maxScore ? maxScore.toFixed(2) : "—"}</div></div>
+          <div class="card stat-card"><div class="k">已审判模型</div><div class="v">${judged}</div></div>
+          <div class="card stat-card"><div class="k">累计成本(估)</div><div class="v" style="font-size:18px">${totalCost ? "$" + totalCost.toFixed(3) : "—"}</div></div>
           <div class="card stat-card"><div class="k">当前分类</div><div class="v" style="font-size:18px">${data.category}</div></div>
         `;
 
@@ -133,9 +139,12 @@
                 <span style="font-size:11px">${stars}</span>
               </div>
             </td>
+            <td style="${it.avg_judge != null ? "color:var(--gold, #fbbf24)" : "color:var(--text-faint)"}">${it.avg_judge != null ? it.avg_judge.toFixed(2) + "🤖" : "未判"}</td>
             <td>${it.battle_count}</td>
             <td>${A.fmtMs(it.avg_latency_ms)}</td>
-            <td>${A.fmtTokens(it.avg_tokens)}</td>
+            <td>${A.fmtMs(it.avg_ttft_ms)}</td>
+            <td>${it.avg_tps ? it.avg_tps + "/s" : "—"}</td>
+            <td>${it.total_cost_usd ? "$" + Number(it.total_cost_usd).toFixed(3) : "—"}</td>
             <td style="color:${it.error_count ? "var(--red)" : "var(--text-faint)"}">${it.error_count || 0}</td>
           `;
           body.appendChild(tr);
