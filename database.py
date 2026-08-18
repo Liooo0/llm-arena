@@ -35,7 +35,7 @@ def _now() -> str:
 
 
 def init_db() -> None:
-    """建表（幂等）。"""
+    """建表(幂等)+ 旧库迁移(缺列 ALTER 补齐)。"""
     with _conn() as conn:
         conn.executescript(
             """
@@ -54,7 +54,13 @@ def init_db() -> None:
                 tokens      INTEGER,
                 latency_ms  INTEGER,
                 error       TEXT,
-                created_at  TEXT NOT NULL
+                created_at  TEXT NOT NULL,
+                input_tokens   INTEGER,
+                output_tokens  INTEGER,
+                ttft_ms        INTEGER,
+                judge_score    INTEGER CHECK(judge_score BETWEEN 1 AND 5),
+                judge_reason   TEXT,
+                cost_usd       REAL
             );
 
             CREATE TABLE IF NOT EXISTS ratings (
@@ -85,6 +91,23 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_duels_question ON duels(question_id);
             """
         )
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """旧库迁移: answers 表缺的新列逐个 ALTER 补齐(幂等)。"""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(answers)")}
+    additions = {
+        "input_tokens": "INTEGER",
+        "output_tokens": "INTEGER",
+        "ttft_ms": "INTEGER",
+        "judge_score": "INTEGER",
+        "judge_reason": "TEXT",
+        "cost_usd": "REAL",
+    }
+    for col, typ in additions.items():
+        if col not in cols:
+            conn.execute(f"ALTER TABLE answers ADD COLUMN {col} {typ}")
 
 
 # ---------------------------------------------------------------------------
@@ -108,16 +131,31 @@ def create_answer(
     tokens: Optional[int],
     latency_ms: Optional[int],
     error: Optional[str] = None,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+    ttft_ms: Optional[int] = None,
+    cost_usd: Optional[float] = None,
 ) -> int:
     """插入一条模型回答记录，返回其 id。失败时 content 可为空、error 填原因。"""
     with _conn() as conn:
         cur = conn.execute(
             """INSERT INTO answers
-               (question_id, model, content, tokens, latency_ms, error, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (question_id, model, content, tokens, latency_ms, error, _now()),
+               (question_id, model, content, tokens, latency_ms, error, created_at,
+                input_tokens, output_tokens, ttft_ms, cost_usd)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (question_id, model, content, tokens, latency_ms, error, _now(),
+             input_tokens, output_tokens, ttft_ms, cost_usd),
         )
         return int(cur.lastrowid)
+
+
+def update_judge(answer_id: int, score: Optional[int], reason: Optional[str]) -> None:
+    """写入 LLM Judge 的结果(可覆盖)。score 为 None 表示本次审判失败。"""
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE answers SET judge_score = ?, judge_reason = ? WHERE id = ?",
+            (score, reason, answer_id),
+        )
 
 
 def upsert_rating(answer_id: int, score: int) -> int:
@@ -256,8 +294,13 @@ def get_elo_leaderboard(category: Optional[str] = None) -> list[dict[str, Any]]:
         SELECT a.model,
                COUNT(DISTINCT a.question_id)                 AS battle_count,
                ROUND(AVG(r.score), 2)                        AS avg_score,
+               ROUND(AVG(a.judge_score), 2)                  AS avg_judge,
                ROUND(AVG(a.latency_ms), 0)                   AS avg_latency_ms,
-               ROUND(AVG(a.tokens), 0)                       AS avg_tokens,
+               ROUND(AVG(a.ttft_ms), 0)                      AS avg_ttft_ms,
+               ROUND(AVG(a.output_tokens), 0)                AS avg_output_tokens,
+               ROUND(SUM(a.cost_usd), 4)                     AS total_cost_usd,
+               ROUND(AVG(CASE WHEN a.latency_ms IS NOT NULL AND a.ttft_ms IS NOT NULL
+                              THEN a.latency_ms - a.ttft_ms END), 0) AS avg_gen_ms,
                SUM(CASE WHEN a.error IS NOT NULL THEN 1 ELSE 0 END) AS error_count
         FROM answers a
         JOIN questions q ON q.id = a.question_id
@@ -274,6 +317,9 @@ def get_elo_leaderboard(category: Optional[str] = None) -> list[dict[str, Any]]:
         rating, games = elo_map.get(d["model"], (elo_engine.START_ELO, 0))
         d["elo"] = rating
         d["duel_count"] = games
+        out_tok = d.get("avg_output_tokens")
+        gen_ms = d.get("avg_gen_ms")
+        d["avg_tps"] = round(out_tok / (gen_ms / 1000), 1) if out_tok and gen_ms else None
         out.append(d)
     # 有对决记录的按 Elo 排,没对决过的按平均分排
     out.sort(key=lambda x: (

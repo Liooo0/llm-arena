@@ -12,7 +12,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -96,6 +99,10 @@ async def api_battle(body: BattleRequest) -> dict:
             tokens=r["tokens"],
             latency_ms=r["latency_ms"],
             error=r["error"],
+            input_tokens=r["input_tokens"],
+            output_tokens=r["output_tokens"],
+            ttft_ms=r["ttft_ms"],
+            cost_usd=r["cost_usd"],
         )
         answers_out.append(
             {
@@ -105,9 +112,16 @@ async def api_battle(body: BattleRequest) -> dict:
                 "tokens": r["tokens"],
                 "latency_ms": r["latency_ms"],
                 "error": r["error"],
+                "input_tokens": r["input_tokens"],
+                "output_tokens": r["output_tokens"],
+                "ttft_ms": r["ttft_ms"],
+                "cost_usd": r["cost_usd"],
                 "rating": None,
             }
         )
+
+    # 返回后由后台线程跑 LLM Judge，不阻塞战斗结果展示
+    _start_judge(question_id)
 
     return {"question_id": question_id, "question": body.question, "category": category, "answers": answers_out}
 
@@ -145,6 +159,49 @@ def _question_of(answer_id: int) -> int:
     if qid is None:
         raise HTTPException(status_code=404, detail="回答不存在")
     return qid
+
+
+class JudgeRequest(BaseModel):
+    question_id: int
+
+
+def _start_judge(question_id: int) -> None:
+    """后台线程跑自动审判: 不阻塞战斗响应, 判完写回 answers 表。"""
+    threading.Thread(target=_run_judge, args=(question_id,), daemon=True).start()
+
+
+def _run_judge(question_id: int) -> None:
+    detail = database.get_history_detail(question_id)
+    if not detail:
+        return
+    question = detail["question"]["text"]
+    category = detail["question"]["category"]
+    candidates = [a for a in detail["answers"] if a["error"] is None and a["content"]]
+    if not candidates:
+        return
+    judge_model = llm_client.pick_judge([a["model"] for a in candidates])
+
+    async def judge_all() -> None:
+        async def one(a: dict) -> None:
+            score, reason = await llm_client.judge_answer(
+                judge_model, question, category, a["content"]
+            )
+            database.update_judge(a["id"], score, reason)
+
+        await asyncio.gather(*(one(a) for a in candidates))
+
+    with contextlib.suppress(Exception):
+        # 审判链路失败不影响主功能, judge 字段保持为空
+        asyncio.run(judge_all())
+
+
+@app.post("/api/judge")
+async def api_judge(body: JudgeRequest) -> dict:
+    """手动触发某次评测的 LLM Judge(异步后台执行, 完成后可在详情中看到)。"""
+    if database.get_history_detail(body.question_id) is None:
+        raise HTTPException(status_code=404, detail="评测记录不存在")
+    _start_judge(body.question_id)
+    return {"ok": True, "judging": True}
 
 
 @app.get("/api/leaderboard")

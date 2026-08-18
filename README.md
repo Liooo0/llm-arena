@@ -10,12 +10,13 @@
 
 | 功能 | 说明 |
 | --- | --- |
-| ⚔️ 对比评测 | 输入问题 → 多选模型（默认全选 5 个）→ 选择分类 → **并发**调用所有选中模型 |
-| 🃏 结果卡片 | 每个模型一张卡：Markdown 渲染回答、耗时、token 数；单模型失败不影响其他，卡片显示错误原因 |
+| ⚔️ 对比评测 | 输入问题 → 多选模型（默认全选）→ 选择分类 → **并发流式**调用所有选中模型 |
+| 🃏 结果卡片 | 每个模型一张卡：Markdown 渲染回答、耗时、**首字延迟(TTFT)、生成速度(TPS)、成本**；单模型失败不影响其他，卡片显示错误原因 |
 | 👁 双盲对决 | 结果默认**匿名**（模型 A/B/C + 卡片乱序）消除品牌偏见；选定两张卡片判定胜负，可随时"揭晓"模型名 |
 | 🏆 Elo 排行榜 | pairwise 对决驱动 **Elo 评分**（K=32），与平均分互补：评分衡量绝对质量，Elo 衡量相对强弱 |
 | ⭐ 打分 | 每个回答可点 1–5 星，可反复修改，实时入库 |
-| 🗂 历史记录 | 所有评测可回看：问题、各模型回答、打分详情 |
+| 🤖 LLM Judge | 对战完成后后台自动审判：裁判模型（自动避开被评模型）从准确性/完整性/结构/可用性四维度打 1–5 分 + 一句话理由，与人工评分互补；也可 `POST /api/judge` 手动重判 |
+| 🗂 历史记录 | 所有评测可回看：问题、各模型回答、打分详情、Judge 结果 |
 | 💚 健康检查 | 页面展示每个模型 API 当前是否可用（加载时自动 ping，点击可刷新） |
 
 ---
@@ -76,6 +77,8 @@ ratings  (id, answer_id→answers UNIQUE, score 1-5,
 | --- | --- | --- |
 | POST | `/api/battle` | `{question, category, models[]}` → 并发调用 → `question_id + answers[]` |
 | POST | `/api/rate` | `{answer_id, score}` → 写入/覆盖评分 |
+| POST | `/api/duel` | `{winner_answer_id, loser_answer_id, outcome}` → 记录对决并更新 Elo |
+| POST | `/api/judge` | `{question_id}` → 触发该场评测的 LLM Judge（后台异步） |
 | GET | `/api/leaderboard?category=` | 排行数据（平均分倒序） |
 | GET | `/api/history` | 评测历史列表 |
 | GET | `/api/history/{id}` | 单次评测详情 |
@@ -134,12 +137,16 @@ bash scripts/acceptance_test.sh   # 需先完成步骤 2、3
 | 模型 id | 名称 | 特点 |
 | --- | --- | --- |
 | `deepseek-v4-flash` | DeepSeek V4 Flash | 快速、便宜，适合日常 |
-| `deepseek-v4-pro` | DeepSeek V4 Pro | 深度推理、代码强 |
+| `deepseek-v4-pro` | DeepSeek V4 Pro | 深度推理、代码强（推理模型，输出含 reasoning） |
 | `glm-5.2` | GLM 5.2 | 通用能力均衡 |
 | `kimi-k3` | Kimi K3 | 长文本、中文友好（该模型仅接受 `temperature=1`） |
 | `qwen3.7-max` | Qwen 3.7 Max | 千问旗舰，综合最强 |
+| `qwen3.8-max-preview` | Qwen 3.8 Max · 国内直连 | 阿里云 token-plan，不走代理 |
+| `deepseek-v4-flash-0731` | DeepSeek V4 Flash · 国内直连 | 阿里云 token-plan，不走代理 |
 
-> 技术细节：不同模型对采样参数要求不同（例如 kimi-k3 拒绝非 1 的 temperature），故温度在模型配置中按需设置，`llm_client.py` 据此构造请求。
+> 通道说明：前 5 个走 opencode 海外通道（需 `LLM_ARENA_API_KEY` + 代理）；后 2 个走阿里云国内直连（需 `ALI_API_KEY`，`trust_env=False` 强制直连）。
+
+> 成本说明：卡面/排行榜的成本是**按 `llm_client.py` 里 `MODEL_PRICES` 单价估算**（占位价，仅供模型间相对比较），不保证与供应商实际计费一致。
 
 ## 界面截图
 

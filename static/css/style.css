@@ -622,3 +622,16 @@ table.rank tr:hover td { background: rgba(255, 255, 255, 0.02); }
   .nav-status { display: none; }
   .container { padding: 22px 16px 48px; }
 }
+
+/* LLM Judge 徽章 */
+.judge-badge {
+  display: inline-block;
+  margin: 6px 14px 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f1420;
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  cursor: help;
+}
