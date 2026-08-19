@@ -5,5 +5,8 @@ __pycache__/
 .DS_Store
 *.pyc
 BRIEF_*.md
-reports/
+# 对战产物：报告 .md 与脚本入库（作品集证据链），原始大 JSON 忽略
+reports/*.json
 scripts/night_*.py
+!reports/*.md
+!scripts/night_battle_20260819.py
