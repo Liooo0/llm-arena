@@ -143,15 +143,17 @@ bash scripts/acceptance_test.sh   # 需先完成步骤 2、3
 
 ## 可用模型
 
-同一个 key 均可调用（`llm_client.py` 中静态配置，各模型给独立强调色）：
+同一个 key 均可调用（`llm_client.py` 中静态配置，各模型给独立强调色）。**按角色分两档，这是本项目的模型选型框架：**
 
-| 模型 id | 名称 | 特点 |
-| --- | --- | --- |
-| `deepseek-v4-flash` | DeepSeek V4 Flash | 快速、便宜，适合日常 |
-| `deepseek-v4-pro` | DeepSeek V4 Pro | 深度推理、代码强 |
-| `glm-5.2` | GLM 5.2 | 通用能力均衡 |
-| `kimi-k3` | Kimi K3 | 长文本、中文友好（该模型仅接受 `temperature=1`） |
-| `qwen3.7-max` | Qwen 3.7 Max | 千问旗舰，综合最强 |
+| 角色 | 模型 id | 名称 | 特点 |
+| --- | --- | --- | --- |
+| 🏭 **生产默认** | `deepseek-v4-flash` | DeepSeek V4 Flash | 快速、便宜、稳定，适合日常高并发生产场景 |
+| 🧠 **复杂推理** | `deepseek-v4-pro` | DeepSeek V4 Pro | 深度推理、代码分析强，适合复杂 Agent 任务 |
+| ⚖️ **对比基准** | `glm-5.2` | GLM 5.2 | 通用能力均衡（benchmark 参照系） |
+| ⚖️ **对比基准** | `kimi-k3` | Kimi K3 | 长文本、中文友好（该模型仅接受 `temperature=1`） |
+| ⚖️ **对比基准** | `qwen3.7-max` | Qwen 3.7 Max | 千问旗舰，综合最强（benchmark 参照系） |
+| 🚀 **国内直连** | `deepseek-v4-flash-0731` | DeepSeek V4 Flash · 直连 | 阿里云 token-plan 通道，代理挂了也能用 |
+| 🚀 **国内直连** | `qwen3.8-max-preview` | Qwen 3.8 Max · 直连 | 阿里云直连通道备选 |
 
 > 技术细节：不同模型对采样参数要求不同（例如 kimi-k3 拒绝非 1 的 temperature），故温度在模型配置中按需设置，`llm_client.py` 据此构造请求。
 
@@ -164,6 +166,9 @@ bash scripts/acceptance_test.sh   # 需先完成步骤 2、3
 ![历史记录](docs/screenshots/history.png)
 
 ## 面试要点
+
+**模型选型怎么做的？**
+生产场景按「成本 × 时延 × 能力」分档：日常高并发（客服/自动回复/批量分析）用 `deepseek-v4-flash`——便宜快，单次调用成本低一个数量级；复杂推理（长代码分析、深度核验）用 `deepseek-v4-pro`。选型前先跑基准：本项目 63 题 × 7 模型的对战数据就是选型依据，不是拍脑袋。
 
 **为什么用并发？**
 `asyncio.gather` 同时发起最多 5 个请求，互不阻塞；实测 5 模型对比一次约 40–60s，串行会慢 5 倍。

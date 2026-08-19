@@ -5,6 +5,12 @@
 - LLM: OpenAI 兼容格式，base_url `https://opencode.ai/zen/go/v1`，Bearer 鉴权
 - 依赖: fastapi, uvicorn, httpx, python-dotenv
 
+## 模型分层（作品集核心叙事）
+- **生产默认**: `deepseek-v4-flash`（快速便宜，适合日常高并发）— 其他项目（liodesktop / renovation-bot / job-hunter / boss-zhipin-helper / jobintel-dashboard）的生产默认模型
+- **高级推理**: `deepseek-v4-pro`（深度推理、代码分析）— liodesktop 复杂核验、llm-arena benchmark
+- **benchmark 参照系**: glm-5.2 / kimi-k3 / qwen3.7-max + 国内直连备选（deepseek-v4-flash-0731 / qwen3.8-max-preview）
+- llm-arena 必须同时接 Flash + Pro，用对战数据证明「模型选型能力」
+
 ## 运行
 ```bash
 cd ~/projects/llm-arena
